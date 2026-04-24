@@ -66,12 +66,17 @@ class DataStore {
     getSales() { return this.data.sales; }
 
     addIngredient(ingredient) {
-        // Find max ID
         const maxId = this.data.ingredients.reduce((max, i) => i.id > max ? i.id : max, 0);
         ingredient.id = maxId + 1;
         this.data.ingredients.push(ingredient);
         this.save();
         return ingredient;
+    }
+
+    deleteIngredient(id) {
+        this.data.ingredients = this.data.ingredients.filter(i => i.id !== id);
+        this.save();
+        return true;
     }
 
     addProduct(product) {
@@ -80,6 +85,22 @@ class DataStore {
         this.data.products.push(product);
         this.save();
         return product;
+    }
+
+    updateProduct(id, updatedData) {
+        const index = this.data.products.findIndex(p => p.id === id);
+        if (index !== -1) {
+            this.data.products[index] = { ...this.data.products[index], ...updatedData };
+            this.save();
+            return true;
+        }
+        return false;
+    }
+
+    deleteProduct(id) {
+        this.data.products = this.data.products.filter(p => p.id !== id);
+        this.save();
+        return true;
     }
 
     addSale(productId, quantity) {

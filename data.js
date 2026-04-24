@@ -1,4 +1,11 @@
 const DEFAULT_DATA = {
+    users: [
+        { id: 1, username: 'admin', password: btoa('admin123'), role: 'admin' },
+        { id: 2, username: 'user', password: btoa('user123'), role: 'user' }
+    ],
+    settings: {
+        currency: 'IDR'
+    },
     ingredients: [
         { id: 1, name: "Flour", unit: "kg", quantity: 50, minQuantity: 10, isCritical: false },
         { id: 2, name: "Sugar", unit: "kg", quantity: 30, minQuantity: 10, isCritical: false },
@@ -51,6 +58,18 @@ class DataStore {
         const stored = localStorage.getItem('sweetStockData');
         if (stored) {
             this.data = JSON.parse(stored);
+            let modified = false;
+            if (!this.data.users) {
+                this.data.users = JSON.parse(JSON.stringify(DEFAULT_DATA.users));
+                modified = true;
+            }
+            if (!this.data.settings) {
+                this.data.settings = JSON.parse(JSON.stringify(DEFAULT_DATA.settings));
+                modified = true;
+            }
+            if (modified) {
+                this.save();
+            }
         } else {
             this.data = JSON.parse(JSON.stringify(DEFAULT_DATA));
             this.save();
@@ -61,9 +80,84 @@ class DataStore {
         localStorage.setItem('sweetStockData', JSON.stringify(this.data));
     }
 
-    getIngredients() { return this.data.ingredients; }
+    getIngredients() {
+        // Return a mapped array where sub-recipes have their quantity computed dynamically
+        return this.data.ingredients.map(i => {
+            const subProduct = this.data.products.find(p => p.linkedIngredientId === i.id);
+            if (subProduct) {
+                return { ...i, quantity: this.calculatePossibleYield(subProduct.recipe), isSubRecipe: true };
+            }
+            return { ...i, isSubRecipe: false };
+        });
+    }
+    
     getProducts() { return this.data.products; }
     getSales() { return this.data.sales; }
+    getUsers() { return this.data.users || []; }
+    getSettings() { return this.data.settings || { currency: 'IDR' }; }
+
+    updateSettings(newSettings) {
+        this.data.settings = { ...(this.data.settings || {}), ...newSettings };
+        this.save();
+    }
+
+    addUser(user) {
+        const users = this.data.users || [];
+        const maxId = users.reduce((max, u) => u.id > max ? u.id : max, 0);
+        user.id = maxId + 1;
+        if (user.password) user.password = btoa(user.password);
+        users.push(user);
+        this.data.users = users;
+        this.save();
+        return user;
+    }
+
+    updateUser(id, updatedData) {
+        const users = this.data.users || [];
+        const index = users.findIndex(u => u.id === id);
+        if (index !== -1) {
+            if (updatedData.password) {
+                updatedData.password = btoa(updatedData.password);
+            }
+            users[index] = { ...users[index], ...updatedData };
+            this.data.users = users;
+            this.save();
+            return true;
+        }
+        return false;
+    }
+
+    deleteUser(id) {
+        if (id === 1) return false; // Prevent deleting main admin
+        this.data.users = (this.data.users || []).filter(u => u.id !== id);
+        this.save();
+        return true;
+    }
+
+    calculatePossibleYield(recipe) {
+        if (!recipe || recipe.length === 0) return 0;
+        
+        let maxPossible = Infinity;
+        
+        for (let item of recipe) {
+            const ing = this.data.ingredients.find(i => i.id === item.ingredientId);
+            if (!ing) return 0;
+            
+            let available = ing.quantity;
+            const subProduct = this.data.products.find(p => p.linkedIngredientId === ing.id);
+            if (subProduct) {
+                available = this.calculatePossibleYield(subProduct.recipe);
+            }
+            
+            if (item.amount <= 0) continue;
+            const possibleFromThis = Math.floor(available / item.amount);
+            if (possibleFromThis < maxPossible) {
+                maxPossible = possibleFromThis;
+            }
+        }
+        
+        return maxPossible === Infinity ? 0 : maxPossible;
+    }
 
     addIngredient(ingredient) {
         const maxId = this.data.ingredients.reduce((max, i) => i.id > max ? i.id : max, 0);
@@ -77,6 +171,16 @@ class DataStore {
         this.data.ingredients = this.data.ingredients.filter(i => i.id !== id);
         this.save();
         return true;
+    }
+
+    updateIngredient(id, updatedData) {
+        const index = this.data.ingredients.findIndex(i => i.id === id);
+        if (index !== -1) {
+            this.data.ingredients[index] = { ...this.data.ingredients[index], ...updatedData };
+            this.save();
+            return true;
+        }
+        return false;
     }
 
     addProduct(product) {
@@ -103,18 +207,63 @@ class DataStore {
         return true;
     }
 
+    deductRecipe(recipe, quantityToDeduct) {
+        for (let item of recipe) {
+            const ing = this.data.ingredients.find(i => i.id === item.ingredientId);
+            if (!ing) continue;
+
+            const subProduct = this.data.products.find(p => p.linkedIngredientId === ing.id);
+            
+            if (subProduct) {
+                // Sub-recipes are purely virtual, recursively deduct raw materials
+                this.deductRecipe(subProduct.recipe, quantityToDeduct * item.amount);
+            } else {
+                // Normal ingredient deduction
+                ing.quantity -= (item.amount * quantityToDeduct);
+                if (ing.quantity < 0) ing.quantity = 0;
+            }
+        }
+    }
+
+    accumulateRequiredIngredients(recipe, multiplier, requiredMap) {
+        if (!recipe || recipe.length === 0) return true;
+        for (let item of recipe) {
+            const ing = this.data.ingredients.find(i => i.id === item.ingredientId);
+            if (!ing) return false; // Ingredient deleted
+
+            const subProduct = this.data.products.find(p => p.linkedIngredientId === ing.id);
+            if (subProduct) {
+                if (!this.accumulateRequiredIngredients(subProduct.recipe, multiplier * item.amount, requiredMap)) {
+                    return false;
+                }
+            } else {
+                requiredMap[ing.id] = (requiredMap[ing.id] || 0) + (item.amount * multiplier);
+            }
+        }
+        return true;
+    }
+
     addSale(productId, quantity) {
         const product = this.data.products.find(p => p.id === productId);
         if (!product) return false;
 
-        // Deduct inventory
-        for (let item of product.recipe) {
-            const ing = this.data.ingredients.find(i => i.id === item.ingredientId);
-            if (ing) {
-                ing.quantity -= (item.amount * quantity);
-                if (ing.quantity < 0) ing.quantity = 0;
+        // Check if we have enough ingredients
+        if (product.recipe && product.recipe.length > 0) {
+            let requiredMap = {};
+            if (!this.accumulateRequiredIngredients(product.recipe, quantity, requiredMap)) {
+                return false; // A required ingredient was deleted
+            }
+
+            for (let ingId in requiredMap) {
+                const ing = this.data.ingredients.find(i => i.id === parseInt(ingId));
+                if (!ing || ing.quantity < requiredMap[ingId]) {
+                    return false; // Not enough stock
+                }
             }
         }
+
+        // Deduct from the product's recipe
+        this.deductRecipe(product.recipe, quantity);
 
         const sale = {
             id: Date.now(),

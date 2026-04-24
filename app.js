@@ -6,6 +6,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Routing
     function navigate(page) {
+        if (!app.currentUser) return;
+        const role = app.currentUser.role;
+        if (role === 'user' && !['dashboard', 'sales', 'settings'].includes(page)) {
+            page = 'dashboard';
+        }
+
         navLinks.forEach(link => {
             link.classList.remove('active');
             if (link.dataset.page === page) link.classList.add('active');
@@ -53,7 +59,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Helper: format currency
-    const formatMoney = (amount) => `$${amount.toFixed(2)}`;
+    const formatMoney = (amount) => {
+        const currency = window.store.getSettings().currency;
+        if (currency === 'IDR') {
+            return `Rp ${amount.toLocaleString('id-ID')}`;
+        }
+        return `$${amount.toFixed(2)}`;
+    };
     
     // --- Renderers ---
     
@@ -150,15 +162,28 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (i.quantity <= i.minQuantity) statusBadge = '<span class="badge badge-warning">LOW</span>';
 
             let criticalBadge = i.isCritical ? '<span class="badge badge-info" style="margin-left:5px">CRITICAL</span>' : '';
+            
+            let stockDisplay = `<strong>${parseFloat(i.quantity.toFixed(2))}</strong> ${i.unit}`;
+            let adjustBtn = `<button class="btn btn-outline btn-sm" style="margin-right: 5px;" onclick="app.showAdjustStock(${i.id})">Adjust</button>`;
+            
+            if (i.isSubRecipe) {
+                stockDisplay += `<br><span style="font-size: 0.8rem; color: var(--text-muted);">(Auto-synced)</span>`;
+                adjustBtn = ''; // Sub-recipes cannot be manually adjusted
+                if (i.quantity === 0) {
+                    statusBadge = '<span class="badge badge-danger">INSUFFICIENT INGREDIENTS</span>';
+                } else {
+                    statusBadge = '<span class="badge badge-info">AUTO-SYNCED</span>';
+                }
+            }
 
             return `
             <tr>
                 <td>${i.name} ${criticalBadge}</td>
-                <td><strong>${parseFloat(i.quantity.toFixed(2))}</strong> ${i.unit}</td>
+                <td>${stockDisplay}</td>
                 <td class="text-muted">Min: ${i.minQuantity}</td>
                 <td>${statusBadge}</td>
                 <td style="text-align:right">
-                    <button class="btn btn-outline btn-sm" style="margin-right: 5px;" onclick="app.showAdjustStock(${i.id})">Adjust</button>
+                    ${adjustBtn}
                     <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="app.deleteIngredient(${i.id})">Delete</button>
                 </td>
             </tr>`;
@@ -191,10 +216,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const products = window.store.getProducts();
         
         let rows = products.map(p => {
+            let possible = 0;
+            if (p.recipe && p.recipe.length > 0) {
+                possible = window.store.calculatePossibleYield(p.recipe);
+            }
+            let stockDisplay = possible > 0 ? `<span class="badge badge-success">${possible} buildable</span>` : `<span class="badge badge-danger">0 buildable</span>`;
+            if (!p.recipe || p.recipe.length === 0) stockDisplay = `<span class="text-muted">No recipe</span>`;
+            
             return `
             <tr>
                 <td><strong>${p.name}</strong></td>
                 <td>${formatMoney(p.price)}</td>
+                <td>${stockDisplay}</td>
                 <td>${p.recipe.length} ingredients</td>
                 <td style="text-align:right">
                     <button class="btn btn-outline btn-sm" style="margin-right: 5px;" onclick="app.showProductForm(${p.id})">Edit</button>
@@ -215,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <tr>
                             <th>Product Name</th>
                             <th>Price</th>
+                            <th>Stock (Buildable)</th>
                             <th>Recipe Complexity</th>
                             <th></th>
                         </tr>
@@ -306,11 +340,63 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function renderSettings() {
+        const settings = window.store.getSettings();
+        const isAdmin = app.currentUser && app.currentUser.role === 'admin';
+        const users = window.store.getUsers();
+
+        let usersHtml = '';
+        if (isAdmin) {
+            usersHtml = `
+                <div class="card mt-4">
+                    <h3 class="mb-4">User Management (Admin Only)</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
+                            <tbody>
+                                ${users.map(u => `
+                                <tr>
+                                    <td>${u.username}</td>
+                                    <td>${u.role}</td>
+                                    <td style="text-align:right">
+                                        ${u.id !== 1 ? `<button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="app.deleteUser(${u.id})">Delete</button>` : ''}
+                                    </td>
+                                </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="mt-4 flex gap-4">
+                        <input type="text" id="new-username" class="form-control" placeholder="New Username">
+                        <input type="password" id="new-password" class="form-control" placeholder="New Password">
+                        <select id="new-role" class="form-control" style="width: auto;">
+                            <option value="user">User</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="app.createUser()">Add User</button>
+                    </div>
+                </div>
+            `;
+        }
+
         pageContainer.innerHTML = `
             <div class="card">
-                <h3 class="mb-4">Settings</h3>
-                <p>System settings goes here (e.g. currency symbol, store name).</p>
+                <h3 class="mb-4">General Settings</h3>
+                <div class="form-group" style="max-width: 300px;">
+                    <label>Currency</label>
+                    <select id="setting-currency" class="form-control" onchange="app.saveCurrency(this.value)" ${isAdmin ? '' : 'disabled'}>
+                        <option value="USD" ${settings.currency === 'USD' ? 'selected' : ''}>USD ($)</option>
+                        <option value="IDR" ${settings.currency === 'IDR' ? 'selected' : ''}>IDR (Rp)</option>
+                    </select>
+                </div>
+                
+                <h4 class="mt-4 mb-4" style="border-top: 1px solid rgba(0,0,0,0.1); padding-top: 1.5rem;">Account Settings</h4>
+                <div class="form-group" style="max-width: 300px;">
+                    <label>Change Password</label>
+                    <input type="password" id="change-password-input" class="form-control" placeholder="New Password">
+                    <button class="btn btn-secondary mt-4" onclick="app.changePassword()">Update Password</button>
+                </div>
             </div>
+            ${usersHtml}
         `;
     }
 
@@ -336,6 +422,72 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Global App Actions ---
     
     window.app = {
+        currentUser: null,
+
+        login: function() {
+            const userInp = document.getElementById('login-username').value.trim();
+            const passInp = document.getElementById('login-password').value.trim();
+            const errEl = document.getElementById('login-error');
+            
+            const users = window.store.getUsers();
+            const user = users.find(u => u.username === userInp && u.password === btoa(passInp));
+            
+            if (user) {
+                errEl.style.display = 'none';
+                localStorage.setItem('currentUser', JSON.stringify({ id: user.id, username: user.username, role: user.role }));
+                document.getElementById('login-username').value = '';
+                document.getElementById('login-password').value = '';
+                initApp();
+            } else {
+                errEl.style.display = 'block';
+            }
+        },
+
+        logout: function() {
+            localStorage.removeItem('currentUser');
+            app.currentUser = null;
+            document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('app').classList.add('hidden');
+        },
+
+        saveCurrency: function(val) {
+            window.store.updateSettings({ currency: val });
+            navigate('settings'); // re-render
+        },
+
+        changePassword: function() {
+            const newPass = document.getElementById('change-password-input').value.trim();
+            if (!newPass) return alert("Enter a new password");
+            if (app.currentUser) {
+                window.store.updateUser(app.currentUser.id, { password: newPass });
+                alert("Password updated!");
+                document.getElementById('change-password-input').value = '';
+            }
+        },
+
+        createUser: function() {
+            const u = document.getElementById('new-username').value.trim();
+            const p = document.getElementById('new-password').value.trim();
+            const r = document.getElementById('new-role').value;
+            if (!u || !p) return alert("Fill all fields");
+            
+            const users = window.store.getUsers();
+            if (users.find(x => x.username === u)) return alert("Username exists");
+            
+            window.store.addUser({ username: u, password: p, role: r });
+            navigate('settings');
+        },
+
+        deleteUser: function(id) {
+            if (confirm("Are you sure you want to delete this user?")) {
+                if(window.store.deleteUser(id)) {
+                    navigate('settings');
+                } else {
+                    alert("Cannot delete main admin");
+                }
+            }
+        },
+
         showAddIngredient: function() {
             const content = `
                 <div class="modal-body">
@@ -449,7 +601,10 @@ document.addEventListener('DOMContentLoaded', () => {
             
             window.app.tempRecipe = product ? JSON.parse(JSON.stringify(product.recipe)) : [];
             const ingredients = window.store.getIngredients();
-            const ingOptions = ingredients.map(i => `<option value="${i.id}" data-unit="${i.unit}">${i.name} (${i.unit})</option>`).join('');
+            const ingOptions = ingredients
+                .filter(i => !product || i.id !== product.linkedIngredientId)
+                .map(i => `<option value="${i.id}" data-unit="${i.unit}">${i.name} (${i.unit})</option>`)
+                .join('');
             
             const content = `
                 <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
@@ -462,6 +617,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="form-group">
                         <label>Price</label>
                         <input type="number" id="new-prod-price" class="form-control" value="${product ? product.price : ''}" placeholder="0" min="0" step="0.01">
+                    </div>
+                    
+                    <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem;">
+                        <input type="checkbox" id="new-prod-as-ingredient" ${product && product.linkedIngredientId ? 'checked' : ''}>
+                        <label style="margin-bottom: 0;">Make this product available as an ingredient (Sub-recipe)</label>
                     </div>
                     
                     <h4 class="mt-4 mb-4" style="border-top: 1px solid rgba(0,0,0,0.1); padding-top: 1.5rem;">Recipe (Bill of Materials)</h4>
@@ -585,6 +745,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const idVal = document.getElementById('edit-prod-id').value;
             const name = document.getElementById('new-prod-name').value.trim();
             const price = parseFloat(document.getElementById('new-prod-price').value);
+            const asIngredient = document.getElementById('new-prod-as-ingredient').checked;
             
             if (!name || isNaN(price) || price < 0) {
                 alert("Please fill out all product details correctly.");
@@ -599,17 +760,50 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (idVal) {
                 // Update existing
+                const existingProd = window.store.getProducts().find(p => p.id === parseInt(idVal));
+                let linkedIngredientId = existingProd.linkedIngredientId;
+                
+                if (asIngredient && !linkedIngredientId) {
+                    const ing = window.store.addIngredient({
+                        name: name,
+                        unit: 'pcs',
+                        quantity: 0,
+                        minQuantity: 0,
+                        isCritical: false
+                    });
+                    linkedIngredientId = ing.id;
+                } else if (!asIngredient && linkedIngredientId) {
+                    window.store.deleteIngredient(linkedIngredientId);
+                    linkedIngredientId = null;
+                } else if (asIngredient && linkedIngredientId) {
+                    window.store.updateIngredient(linkedIngredientId, { name: name });
+                }
+                
                 window.store.updateProduct(parseInt(idVal), {
                     name: name,
                     price: price,
-                    recipe: window.app.tempRecipe || []
+                    recipe: window.app.tempRecipe || [],
+                    linkedIngredientId: linkedIngredientId
                 });
             } else {
                 // Add new
+                let linkedIngredientId = null;
+                if (asIngredient) {
+                    const ing = window.store.addIngredient({
+                        name: name,
+                        unit: 'pcs',
+                        quantity: 0,
+                        minQuantity: 0,
+                        isCritical: false
+                    });
+                    linkedIngredientId = ing.id;
+                }
+                
                 window.store.addProduct({
                     name: name,
                     price: price,
-                    recipe: window.app.tempRecipe || []
+                    recipe: window.app.tempRecipe || [],
+                    linkedIngredientId: linkedIngredientId
                 });
             }
             
@@ -767,5 +961,32 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Initialize
-    navigate('dashboard');
+    function initApp() {
+        const userStr = localStorage.getItem('currentUser');
+        if (userStr) {
+            app.currentUser = JSON.parse(userStr);
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            
+            document.getElementById('header-avatar').textContent = app.currentUser.username.charAt(0).toUpperCase();
+            document.getElementById('header-role').textContent = app.currentUser.role.charAt(0).toUpperCase() + app.currentUser.role.slice(1);
+            
+            // Show/hide nav links based on role
+            navLinks.forEach(link => {
+                const page = link.dataset.page;
+                if (app.currentUser.role === 'user' && !['dashboard', 'sales', 'settings'].includes(page)) {
+                    link.style.display = 'none';
+                } else {
+                    link.style.display = 'flex';
+                }
+            });
+            
+            navigate('dashboard');
+        } else {
+            document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('app').classList.add('hidden');
+        }
+    }
+    
+    initApp();
 });

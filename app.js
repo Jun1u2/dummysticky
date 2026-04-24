@@ -357,11 +357,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="form-group">
                         <label>Initial Quantity</label>
-                        <input type="number" id="new-ing-qty" class="form-control" value="0" min="0" step="0.01">
+                        <input type="number" id="new-ing-qty" class="form-control" value="" placeholder="0" min="0" step="0.01">
                     </div>
                     <div class="form-group">
                         <label>Minimum Threshold (Alert Level)</label>
-                        <input type="number" id="new-ing-min" class="form-control" value="5" min="0" step="0.01">
+                        <input type="number" id="new-ing-min" class="form-control" value="" placeholder="5" min="0" step="0.01">
                     </div>
                     <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem;">
                         <input type="checkbox" id="new-ing-critical">
@@ -379,8 +379,8 @@ document.addEventListener('DOMContentLoaded', () => {
         submitNewIngredient: function() {
             const name = document.getElementById('new-ing-name').value.trim();
             const unit = document.getElementById('new-ing-unit').value.trim();
-            const qty = parseFloat(document.getElementById('new-ing-qty').value);
-            const minQty = parseFloat(document.getElementById('new-ing-min').value);
+            const qty = parseFloat(document.getElementById('new-ing-qty').value || "0");
+            const minQty = parseFloat(document.getElementById('new-ing-min').value || "5");
             const isCritical = document.getElementById('new-ing-critical').checked;
             
             if (!name || !unit || isNaN(qty) || isNaN(minQty) || qty < 0 || minQty < 0) {
@@ -416,7 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="form-group">
                         <label>Amount (${ing.unit})</label>
-                        <input type="number" id="adj-amount" class="form-control" value="0" min="0.01" step="0.01">
+                        <input type="number" id="adj-amount" class="form-control" value="" placeholder="0" min="0.01" step="0.01">
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -449,7 +449,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             window.app.tempRecipe = product ? JSON.parse(JSON.stringify(product.recipe)) : [];
             const ingredients = window.store.getIngredients();
-            const ingOptions = ingredients.map(i => `<option value="${i.id}">${i.name} (${i.unit})</option>`).join('');
+            const ingOptions = ingredients.map(i => `<option value="${i.id}" data-unit="${i.unit}">${i.name} (${i.unit})</option>`).join('');
             
             const content = `
                 <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
@@ -461,7 +461,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="form-group">
                         <label>Price</label>
-                        <input type="number" id="new-prod-price" class="form-control" value="${product ? product.price : 0}" min="0" step="0.01">
+                        <input type="number" id="new-prod-price" class="form-control" value="${product ? product.price : ''}" placeholder="0" min="0" step="0.01">
                     </div>
                     
                     <h4 class="mt-4 mb-4" style="border-top: 1px solid rgba(0,0,0,0.1); padding-top: 1.5rem;">Recipe (Bill of Materials)</h4>
@@ -469,13 +469,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="form-group" style="display: flex; gap: 0.5rem; align-items: flex-end;">
                         <div style="flex: 2;">
                             <label>Ingredient</label>
-                            <select id="recipe-ing-select" class="form-control">
+                            <select id="recipe-ing-select" class="form-control" onchange="app.updateRecipeUnitOptions()">
                                 ${ingOptions}
                             </select>
                         </div>
                         <div style="flex: 1;">
                             <label>Amount</label>
-                            <input type="number" id="recipe-ing-amount" class="form-control" value="1" min="0.01" step="0.01">
+                            <input type="number" id="recipe-ing-amount" class="form-control" value="" placeholder="1" min="0.01" step="0.01">
+                        </div>
+                        <div style="flex: 1;">
+                            <label>Unit</label>
+                            <select id="recipe-ing-unit" class="form-control">
+                            </select>
                         </div>
                         <button class="btn btn-secondary" onclick="app.addTempRecipeItem()" style="padding: 0.75rem;">Add</button>
                     </div>
@@ -490,13 +495,56 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             showModal(id ? 'Edit Product' : 'Add New Product', content);
             window.app.renderTempRecipeList(); // Render immediately for edit mode
+            window.app.updateRecipeUnitOptions(); // Initialize unit options
         },
         
+        updateRecipeUnitOptions: function() {
+            const select = document.getElementById('recipe-ing-select');
+            const unitSelect = document.getElementById('recipe-ing-unit');
+            if (!select || !unitSelect) return;
+            const selectedOption = select.options[select.selectedIndex];
+            if (!selectedOption) return;
+            
+            const baseUnit = selectedOption.getAttribute('data-unit');
+            let optionsHtml = `<option value="${baseUnit}">${baseUnit}</option>`;
+            
+            if (baseUnit === 'kg') {
+                optionsHtml += `<option value="g">g</option>`;
+            } else if (baseUnit === 'g') {
+                optionsHtml += `<option value="kg">kg</option>`;
+            } else if (baseUnit === 'L') {
+                optionsHtml += `<option value="ml">ml</option>`;
+            } else if (baseUnit === 'ml') {
+                optionsHtml += `<option value="L">L</option>`;
+            }
+            
+            unitSelect.innerHTML = optionsHtml;
+        },
+
         addTempRecipeItem: function() {
-            const ingId = parseInt(document.getElementById('recipe-ing-select').value);
-            const amount = parseFloat(document.getElementById('recipe-ing-amount').value);
+            const select = document.getElementById('recipe-ing-select');
+            const ingId = parseInt(select.value);
+            let amount = parseFloat(document.getElementById('recipe-ing-amount').value || "1");
+            const unitSelect = document.getElementById('recipe-ing-unit');
+            const selectedUnit = unitSelect ? unitSelect.value : null;
             
             if (isNaN(ingId) || isNaN(amount) || amount <= 0) return;
+            
+            const selectedOption = select.options[select.selectedIndex];
+            const baseUnit = selectedOption ? selectedOption.getAttribute('data-unit') : null;
+            
+            // Convert to base unit if necessary
+            if (selectedUnit && baseUnit && selectedUnit !== baseUnit) {
+                if (baseUnit === 'kg' && selectedUnit === 'g') {
+                    amount = amount / 1000;
+                } else if (baseUnit === 'g' && selectedUnit === 'kg') {
+                    amount = amount * 1000;
+                } else if (baseUnit === 'L' && selectedUnit === 'ml') {
+                    amount = amount / 1000;
+                } else if (baseUnit === 'ml' && selectedUnit === 'L') {
+                    amount = amount * 1000;
+                }
+            }
             
             const existing = window.app.tempRecipe.find(r => r.ingredientId === ingId);
             if (existing) {

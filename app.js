@@ -158,7 +158,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="text-muted">Min: ${i.minQuantity}</td>
                 <td>${statusBadge}</td>
                 <td style="text-align:right">
-                    <button class="btn btn-outline btn-sm" onclick="app.showAdjustStock(${i.id})">Adjust</button>
+                    <button class="btn btn-outline btn-sm" style="margin-right: 5px;" onclick="app.showAdjustStock(${i.id})">Adjust</button>
+                    <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="app.deleteIngredient(${i.id})">Delete</button>
                 </td>
             </tr>`;
         }).join('');
@@ -196,7 +197,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${formatMoney(p.price)}</td>
                 <td>${p.recipe.length} ingredients</td>
                 <td style="text-align:right">
-                    <button class="btn btn-outline btn-sm" onclick="app.showRecipe(${p.id})">View Recipe</button>
+                    <button class="btn btn-outline btn-sm" style="margin-right: 5px;" onclick="app.showProductForm(${p.id})">Edit</button>
+                    <button class="btn btn-outline btn-sm" style="margin-right: 5px;" onclick="app.showRecipe(${p.id})">View</button>
+                    <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="app.deleteProduct(${p.id})">Delete</button>
                 </td>
             </tr>`;
         }).join('');
@@ -204,7 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const html = `
             <div class="flex justify-between items-center mb-4">
                 <p class="text-muted">Manage desserts and their Bill of Materials (Recipes).</p>
-                <button class="btn btn-primary" onclick="app.showAddProduct()">+ New Product</button>
+                <button class="btn btn-primary" onclick="app.showProductForm()">+ New Product</button>
             </div>
             <div class="table-container">
                 <table>
@@ -230,27 +233,24 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="grid-2">
                 <div class="card" id="pos-card">
                     <h3 class="mb-4">New Sale (POS Lite)</h3>
-                    <p class="text-muted mb-4">Tap a product to select it.</p>
+                    <p class="text-muted mb-4">Tap a product to add it to the cart.</p>
                     <div class="pos-products mb-4">
                         ${products.map(p => `
-                            <div class="pos-product-card" onclick="app.selectProduct(${p.id}, event)">
+                            <div class="pos-product-card" onclick="app.addToCart(${p.id})">
                                 <div class="pos-product-name">${p.name}</div>
                                 <div class="pos-product-price">${formatMoney(p.price)}</div>
                             </div>
                         `).join('')}
                     </div>
                     
-                    <input type="hidden" id="pos-product" value="">
-                    
-                    <div id="pos-qty-section" style="display: none;">
-                        <h4 id="pos-selected-name" class="mb-4" style="text-align: center; color: var(--primary); font-size: 1.25rem;"></h4>
-                        <div class="qty-control">
-                            <button class="qty-btn" onclick="app.changeQty(-1)">-</button>
-                            <span class="qty-display" id="pos-qty-display">1</span>
-                            <button class="qty-btn" onclick="app.changeQty(1)">+</button>
+                    <div id="pos-cart-section" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid rgba(0,0,0,0.1);">
+                        <h4 class="mb-3">Current Cart</h4>
+                        <ul id="pos-cart-list" style="list-style: none; padding: 0; margin-bottom: 1rem;"></ul>
+                        <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1rem; margin-bottom: 1rem;">
+                            <span>Total:</span>
+                            <span id="pos-cart-total">$0.00</span>
                         </div>
-                        <input type="hidden" id="pos-qty" value="1">
-                        <button class="btn btn-primary" style="width:100%; justify-content:center; padding: 1rem; font-size: 1.1rem; margin-top: 1rem;" onclick="app.submitSale()">Complete Sale</button>
+                        <button class="btn btn-primary" style="width:100%; justify-content:center; padding: 1rem; font-size: 1.1rem;" onclick="app.submitCartSale()">Complete Sale</button>
                     </div>
                 </div>
                 <div class="card">
@@ -441,41 +441,129 @@ document.addEventListener('DOMContentLoaded', () => {
             navigate('inventory'); // refresh view
         },
         
-        showAddProduct: function() {
+        showProductForm: function(id = null) {
+            let product = null;
+            if (id) {
+                product = window.store.getProducts().find(p => p.id === id);
+            }
+            
+            window.app.tempRecipe = product ? JSON.parse(JSON.stringify(product.recipe)) : [];
+            const ingredients = window.store.getIngredients();
+            const ingOptions = ingredients.map(i => `<option value="${i.id}">${i.name} (${i.unit})</option>`).join('');
+            
             const content = `
-                <div class="modal-body">
-                    <p class="mb-4">Enter new product details. (Recipe editing coming soon)</p>
+                <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                    <p class="mb-4">${id ? 'Edit product details and Recipe.' : 'Enter new product details and build its Recipe (Bill of Materials).'}</p>
+                    <input type="hidden" id="edit-prod-id" value="${id || ''}">
                     <div class="form-group">
                         <label>Product Name</label>
-                        <input type="text" id="new-prod-name" class="form-control" placeholder="e.g. Strawberry Shortcake">
+                        <input type="text" id="new-prod-name" class="form-control" placeholder="e.g. Strawberry Shortcake" value="${product ? product.name : ''}">
                     </div>
                     <div class="form-group">
                         <label>Price</label>
-                        <input type="number" id="new-prod-price" class="form-control" value="0" min="0" step="0.01">
+                        <input type="number" id="new-prod-price" class="form-control" value="${product ? product.price : 0}" min="0" step="0.01">
                     </div>
+                    
+                    <h4 class="mt-4 mb-4" style="border-top: 1px solid rgba(0,0,0,0.1); padding-top: 1.5rem;">Recipe (Bill of Materials)</h4>
+                    
+                    <div class="form-group" style="display: flex; gap: 0.5rem; align-items: flex-end;">
+                        <div style="flex: 2;">
+                            <label>Ingredient</label>
+                            <select id="recipe-ing-select" class="form-control">
+                                ${ingOptions}
+                            </select>
+                        </div>
+                        <div style="flex: 1;">
+                            <label>Amount</label>
+                            <input type="number" id="recipe-ing-amount" class="form-control" value="1" min="0.01" step="0.01">
+                        </div>
+                        <button class="btn btn-secondary" onclick="app.addTempRecipeItem()" style="padding: 0.75rem;">Add</button>
+                    </div>
+                    
+                    <ul id="temp-recipe-list" style="list-style: none; padding: 0; margin-top: 1rem; background: rgba(0,0,0,0.02); border-radius: 8px;">
+                    </ul>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-outline" onclick="app.closeModal()">Cancel</button>
-                    <button class="btn btn-primary" onclick="app.submitNewProduct()">Save Product</button>
+                    <button class="btn btn-primary" onclick="app.submitNewProduct()">${id ? 'Update Product' : 'Save Product'}</button>
                 </div>
             `;
-            showModal('Add New Product', content);
+            showModal(id ? 'Edit Product' : 'Add New Product', content);
+            window.app.renderTempRecipeList(); // Render immediately for edit mode
+        },
+        
+        addTempRecipeItem: function() {
+            const ingId = parseInt(document.getElementById('recipe-ing-select').value);
+            const amount = parseFloat(document.getElementById('recipe-ing-amount').value);
+            
+            if (isNaN(ingId) || isNaN(amount) || amount <= 0) return;
+            
+            const existing = window.app.tempRecipe.find(r => r.ingredientId === ingId);
+            if (existing) {
+                existing.amount += amount;
+            } else {
+                window.app.tempRecipe.push({ ingredientId: ingId, amount: amount });
+            }
+            
+            window.app.renderTempRecipeList();
+        },
+        
+        removeTempRecipeItem: function(ingId) {
+            window.app.tempRecipe = window.app.tempRecipe.filter(r => r.ingredientId !== ingId);
+            window.app.renderTempRecipeList();
+        },
+        
+        renderTempRecipeList: function() {
+            const list = document.getElementById('temp-recipe-list');
+            if (!list) return; // Modal might be closed
+            if (!window.app.tempRecipe || window.app.tempRecipe.length === 0) {
+                list.innerHTML = '<li style="padding: 1rem; color: var(--text-muted); text-align: center;">No ingredients added yet.</li>';
+                return;
+            }
+            
+            const ingredients = window.store.getIngredients();
+            
+            list.innerHTML = window.app.tempRecipe.map(item => {
+                const ing = ingredients.find(i => i.id === item.ingredientId);
+                return `
+                <li style="padding: 0.75rem 1rem; border-bottom: 1px solid rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center;">
+                    <span><strong>${parseFloat(item.amount.toFixed(3))} ${ing ? ing.unit : '?'}</strong> of ${ing ? ing.name : 'Unknown'}</span>
+                    <button style="background: none; border: none; color: var(--danger); cursor: pointer; font-size: 1.25rem;" onclick="app.removeTempRecipeItem(${item.ingredientId})">&times;</button>
+                </li>`;
+            }).join('');
         },
         
         submitNewProduct: function() {
+            const idVal = document.getElementById('edit-prod-id').value;
             const name = document.getElementById('new-prod-name').value.trim();
             const price = parseFloat(document.getElementById('new-prod-price').value);
             
             if (!name || isNaN(price) || price < 0) {
-                alert("Please fill out all fields correctly.");
+                alert("Please fill out all product details correctly.");
                 return;
             }
             
-            window.store.addProduct({
-                name: name,
-                price: price,
-                recipe: [] // Empty recipe for now
-            });
+            if (!window.app.tempRecipe || window.app.tempRecipe.length === 0) {
+                if(!confirm("Are you sure you want to save a product with NO ingredients in its recipe?")) {
+                    return;
+                }
+            }
+            
+            if (idVal) {
+                // Update existing
+                window.store.updateProduct(parseInt(idVal), {
+                    name: name,
+                    price: price,
+                    recipe: window.app.tempRecipe || []
+                });
+            } else {
+                // Add new
+                window.store.addProduct({
+                    name: name,
+                    price: price,
+                    recipe: window.app.tempRecipe || []
+                });
+            }
             
             closeModal();
             navigate('products');
@@ -510,53 +598,103 @@ document.addEventListener('DOMContentLoaded', () => {
             showModal(`Recipe: ${product.name}`, content);
         },
         
-        selectProduct: function(id, event) {
-            document.getElementById('pos-product').value = id;
-            document.querySelectorAll('.pos-product-card').forEach(el => el.classList.remove('selected'));
-            if (event) event.currentTarget.classList.add('selected');
-            
-            const product = window.store.getProducts().find(p => p.id === id);
-            document.getElementById('pos-selected-name').textContent = product.name;
-            document.getElementById('pos-qty-section').style.display = 'block';
-            document.getElementById('pos-qty').value = 1;
-            document.getElementById('pos-qty-display').textContent = '1';
-            
-            if (window.innerWidth <= 768) {
-                document.getElementById('pos-qty-section').scrollIntoView({behavior: 'smooth', block: 'end'});
+        deleteIngredient: function(id) {
+            if(confirm("Are you sure you want to delete this ingredient? This may affect products that use it in their recipe.")) {
+                window.store.deleteIngredient(id);
+                navigate('inventory');
             }
         },
         
-        changeQty: function(delta) {
-            const input = document.getElementById('pos-qty');
-            const display = document.getElementById('pos-qty-display');
-            let val = parseInt(input.value) + delta;
-            if (val < 1) val = 1;
-            input.value = val;
-            display.textContent = val;
+        deleteProduct: function(id) {
+            if(confirm("Are you sure you want to delete this product?")) {
+                window.store.deleteProduct(id);
+                navigate('products');
+            }
         },
-        
-        submitSale: function() {
-            const productIdStr = document.getElementById('pos-product').value;
-            if (!productIdStr) {
-                alert("Please select a product first");
-                return;
-            }
-            const productId = parseInt(productIdStr);
-            const qty = parseInt(document.getElementById('pos-qty').value);
-            
-            if (isNaN(qty) || qty <= 0) {
-                alert("Please enter a valid quantity");
-                return;
-            }
-            
-            if (window.store.addSale(productId, qty)) {
-                // Clear and refresh
-                document.getElementById('pos-qty-section').style.display = 'none';
-                document.getElementById('pos-product').value = '';
-                document.querySelectorAll('.pos-product-card').forEach(el => el.classList.remove('selected'));
-                updateTodaySalesList();
+
+        addToCart: function(id) {
+            if (!window.app.cart) window.app.cart = {};
+            if (window.app.cart[id]) {
+                window.app.cart[id]++;
             } else {
-                alert("Failed to process sale.");
+                window.app.cart[id] = 1;
+            }
+            window.app.renderCart();
+            if (window.innerWidth <= 768) {
+                document.getElementById('pos-cart-section').scrollIntoView({behavior: 'smooth', block: 'end'});
+            }
+        },
+        
+        changeCartQty: function(id, delta) {
+            if (!window.app.cart[id]) return;
+            window.app.cart[id] += delta;
+            if (window.app.cart[id] <= 0) {
+                delete window.app.cart[id];
+            }
+            window.app.renderCart();
+        },
+        
+        renderCart: function() {
+            const section = document.getElementById('pos-cart-section');
+            const list = document.getElementById('pos-cart-list');
+            const totalEl = document.getElementById('pos-cart-total');
+            
+            if (!window.app.cart || Object.keys(window.app.cart).length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            section.style.display = 'block';
+            const products = window.store.getProducts();
+            let total = 0;
+            
+            list.innerHTML = Object.keys(window.app.cart).map(idStr => {
+                const id = parseInt(idStr);
+                const qty = window.app.cart[id];
+                const product = products.find(p => p.id === id);
+                if (!product) return '';
+                
+                total += product.price * qty;
+                
+                return `
+                <li style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid rgba(0,0,0,0.05);">
+                    <div style="flex: 1;">
+                        <div style="font-weight: 500;">${product.name}</div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">${formatMoney(product.price)}</div>
+                    </div>
+                    <div class="qty-control" style="margin: 0; padding: 0;">
+                        <button class="qty-btn" style="width: 30px; height: 30px; padding: 0;" onclick="app.changeCartQty(${id}, -1)">-</button>
+                        <span class="qty-display" style="width: 30px; font-size: 1rem;">${qty}</span>
+                        <button class="qty-btn" style="width: 30px; height: 30px; padding: 0;" onclick="app.changeCartQty(${id}, 1)">+</button>
+                    </div>
+                    <div style="width: 80px; text-align: right; font-weight: bold;">
+                        ${formatMoney(product.price * qty)}
+                    </div>
+                </li>
+                `;
+            }).join('');
+            
+            totalEl.textContent = formatMoney(total);
+        },
+        
+        submitCartSale: function() {
+            if (!window.app.cart || Object.keys(window.app.cart).length === 0) return;
+            
+            let successCount = 0;
+            for (const [idStr, qty] of Object.entries(window.app.cart)) {
+                const id = parseInt(idStr);
+                if (window.store.addSale(id, qty)) {
+                    successCount++;
+                } else {
+                    const prod = window.store.getProducts().find(p => p.id === id);
+                    alert("Failed to process sale for " + (prod ? prod.name : "a product") + ". Please check inventory stock.");
+                }
+            }
+            
+            if (successCount > 0) {
+                alert("Sale Complete!");
+                window.app.cart = {}; // Clear cart
+                navigate('sales'); // refresh view
             }
         },
         
